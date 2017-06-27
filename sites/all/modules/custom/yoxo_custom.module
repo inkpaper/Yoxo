@@ -1,0 +1,534 @@
+<?php 
+/**
+ * hook_menu
+ * 作为接口api调用
+ **/
+function yoxo_custom_menu(){
+	$itms = array();
+
+	//test
+    $items['test'] = array(
+        'page callback'   => 'test',
+        'type'        => MENU_CALLBACK,
+        'access callback' => TRUE,
+    );
+
+    return $items;
+}
+
+
+
+/**
+ * 根据传递过来的文章列表进行html输出
+ * @return string 文章的html输出语句
+ **/
+function sidebar_article_list($article_list){
+	$article_list_count = 0;
+    $article_list_html = '';
+    foreach ($article_list as $nid => $article) {
+        $article_list_count++;
+
+        $article_list_title = $article->title;
+        $article_list_url = '/node/' . $article->nid;
+        $article_list_html .= "<li><div class='article-list-sort no-$article_list_count'>$article_list_count</div><a href='$article_list_url' class='article-list-title'>$article_list_title</a></li>";
+    }
+	return $article_list_html;
+}
+
+
+/**
+ * 获取最新文章列表
+ * @return string 文章的html输出语句
+ **/
+function get_new_article_list(){
+	$new_article_list = db_select('node', 'n')
+					->fields('n')
+					->condition('type', 'article')
+					->orderBy('created', 'DESC')
+					->extend('PagerDefault')
+			      	->limit(7)
+					->execute()
+					->fetchAll();
+	$new_article_html = sidebar_article_list($new_article_list);
+	return $new_article_html;
+}
+
+function get_hot_article_list(){
+	$month_date=strtotime("-1 month");//最近一个月
+
+ 	$query = 'SELECT  n.title, n.nid, count(c.cid)} counts FROM {node} n 
+ 			LEFT JOIN {comment} c ON n.nid = c.nid WHERE n.created > :month_date group by n.nid order By counts DESC limit 7';
+ 	$hot_article_list = db_query($query, array(
+    ':month_date' => $month_date,
+  	))->fetchAll();
+ 	
+ 	
+	$hot_article_html = sidebar_article_list($hot_article_list);
+	return $hot_article_html;
+}
+
+/**
+ * 随机获取文章列表
+ * @return string 文章的html输出语句
+ **/
+function get_rand_article_list(){
+	//获取文章数组并打乱
+	$result = node_load_multiple(array(), array('type'=>'article', 'status'=>1));
+	shuffle($result);
+
+	$rand_article_list = array_slice($result, 0, 7);
+    $rand_article_html = sidebar_article_list($rand_article_list);
+	return $rand_article_html;
+}
+
+
+
+/**
+ * 根据内容类型获取节点
+ * @return 文章数组
+ **/
+function get_nodes_by_type($type){
+	return node_load_multiple(array(), array('type'=>$type, 'status'=>1));
+}
+
+
+
+/**
+ * 获取友情链接
+ * @return 友情链接的html输出语句
+ **/
+function get_friend_link(){
+	$friend_links = get_nodes_by_type('friend_link_url');
+	$friend_links = array_slice($friend_links, 0, 6);
+	$friend_links_html = '';
+	foreach ($friend_links as $nid => $value) {
+		$friend_links_url = $value->field_url['und'][0]['value'];
+		$friend_links_title = $value->title;
+		$friend_links_html .= "<a href='$friend_links_url'>$friend_links_title</a>";
+		// if($friend_links_count >= 6) break;
+	}
+	return $friend_links_html;
+}
+
+
+
+/**
+ * 获取图文页面所有的article类型
+ * @return string 文章的html输出语句
+ **/
+function get_all_tuwen_article(){
+	$nodes = get_nodes_by_type('article');
+	//print_r ($nodes);
+
+	$html_str = '<ul>';//用于存储输出的html语句
+
+
+	//重新根据置顶排序
+	$sort = array(
+         'direction' => 'SORT_DESC', //排序顺序标志 SORT_DESC 降序；SORT_ASC 升序
+        'field'     => 'sticky',       //排序字段
+	);
+	$arrSort = array();
+	foreach($nodes AS $nid => $node){
+		foreach($node AS $key=>$value){
+			$arrSort[$key][$nid] = $value;
+		}
+	}
+	if($sort['direction']){
+	    array_multisort($arrSort[$sort['field']], constant($sort['direction']), $nodes);
+	}
+	
+	foreach ($nodes as $nid => $node) {
+		$sticky = $node->sticky;
+		if($sticky=='1'){$html_top ='<i class="sticky-top"></i>';}
+		else{$html_top='';}
+		$image_uri = file_create_url($node->field_image['und'][0]['uri']);
+		$image_title = $node->title;
+		$author_name = $node->name;
+		$create_time = format_date($node->created,'custom', 'Y-m-d H:i');
+		$author_img = get_author_image($node->uid);//从yoxo_custom中调用
+		$html_str .= "<li><img class='content-image-uri' src=$image_uri>".$html_top."
+						<div class='content-image-title'>$image_title</div>
+						<div class='content-create-time'>$create_time</div>
+						<a class='content-attention-button' href='#'>关注</a>
+						<div class='author-message'>
+						<img class='content-author-img' src=$author_img>
+						<div class='content-author-name'>$author_name</div>
+						<span class='content-article-favorite'>33</span>
+						<span class='content-article-comment'>2333</span>
+						<span class='content-article-browse'>2333</span>
+						</div>
+						</li>";
+	}
+	$html_str .= '</ul>';
+
+	return $html_str;
+}
+
+
+
+/**
+ * 根据传递过来的展示页面名称作为field_type获取分类id
+ * @return array 子分类id
+ **/
+function get_tid_by_type($type){
+	$terms = taxonomy_get_tree(3);
+	$type_tid = array();
+	foreach ($terms as $key => $value) {
+		//不存在父级且分类名与传递过来的分类类型一致就是我们要找的分类
+		if($value->parents[0] == 0 && $value->name == $type){
+			//根据找到分类的id获取子分类
+			$result = db_select('taxonomy_term_hierarchy', 't')
+					->fields('t')
+					->condition('parent', $value->tid)
+					->execute()
+					->fetchAll();
+			foreach ($result as $k => $v) {
+				$type_tid[] = $v->tid;
+			}
+		}
+	}
+	return $type_tid;
+}
+
+
+
+/**
+ * 根据传递过来的展示页面名称作为field_type获取文章id
+ * @return array 文章id
+ **/
+function get_nid_by_type($type){
+	$type_tid = get_tid_by_type($type);
+	$article_nid = array();
+	if($type_tid != null){
+		$result = db_select('field_data_field_type', 'f')
+				->fields('f')
+				->condition('field_type_tid', $type_tid, 'IN')
+				->execute()
+				->fetchAll();
+		foreach ($result as $k => $v) {
+			$article_nid[] = $v->entity_id;
+		}
+	}
+	return $article_nid;
+}
+
+
+
+/**
+ * 根据传递过来的展示页面名称作为field_type获取文章
+ * @return object article
+ **/
+function get_article_by_type($type){
+	$article_nid = get_nid_by_type($type);
+	$article_html = '';
+	if($article_nid != null){
+		
+		$articles = db_select('node', 'n')
+			->fields('n',array('nid'))
+			->condition('nid', $article_nid, 'IN')
+			->orderBy('sticky', 'DESC')
+			->execute()
+			->fetchAll(); 
+		$article_count = 0;
+		foreach ($articles as $key => $value) {
+			$article_count++;
+			$article = node_load($value->nid);//由此函数来快速获得img链接
+			$article_url = '/node/' . $value->nid;
+			$article_title = $article->title;
+			$article_img_url = file_create_url($article->field_image['und'][0]['uri']);
+			$sticky = $article->sticky;
+			if($sticky=='1'){$html_top ='<i class="sticky-top"></i>';}
+			else{$html_top='';}
+			$article_html .= "<li><a href='$article_url'><img src=$article_img_url></a>
+							<a class='fenlan_article_title' href='$article_url'>$article_title</a>".$html_top."</li>";
+			if($article_count >= 8) break;
+		}
+	}
+	return $article_html;
+}
+
+
+
+/**
+ * 获取分栏页面所有的article类型
+ * @return string 文章的html输出语句
+ **/
+function get_all_fenlan_article(){
+	//获取菜单选项，
+	$menu = menu_tree('main-menu');
+	$res = '';
+	foreach ($menu as $key => $value) {
+
+		if($value['#original_link']['plid'] == '0' && $value['#original_link']['has_children'] != '0'){
+			//根据链接去掉node/获取nid
+			$nid = mb_substr($value['#href'], 5);
+			$main_article = node_load($nid);//分栏主菜单
+
+			$fenlan_icon_uri = file_create_url($main_article->field_image['und'][0]['uri']);
+			$more_url = $value['#href'];
+			$fenlan_title = $value['#title'];
+			$article = get_article_by_type($fenlan_title);
+			if($article != ''){
+				$res .= "<li class='fenlan-topic'>
+						<div class='main-topic'><img class='fenlan-icon-uri' src=$fenlan_icon_uri>
+						<span class='fenlan-title'>$fenlan_title</span>
+						<a class='more-url' href=$more_url>更多></a></div>
+						<ul>$article</ul>
+						</li>";
+			}
+		}
+	}
+
+	return $res;
+}
+
+
+
+/**
+ * 获取瀑布流页面所有的article类型
+ * @return string 文章的html输出语句
+ **/
+function get_all_waterfall_article(){
+	$nodes = get_nodes_by_type('article');
+	//重新根据置顶排序
+	$sort = array(
+         'direction' => 'SORT_DESC', //排序顺序标志 SORT_DESC 降序；SORT_ASC 升序
+        'field'     => 'sticky',       //排序字段
+	);
+	$arrSort = array();
+	foreach($nodes AS $nid => $node){
+		foreach($node AS $key=>$value){
+			$arrSort[$key][$nid] = $value;
+		}
+	}
+	if($sort['direction']){
+	    array_multisort($arrSort[$sort['field']], constant($sort['direction']), $nodes);
+	}
+
+	$html_str = '';//用于存储输出的html语句
+	foreach ($nodes as $nid => $node) {
+		if($node->field_waterfall_image != null){
+			$sticky = $node->sticky;
+			if($sticky=='1'){$html_top ='<i class="sticky-top"></i>';}
+			else{$html_top='';}
+			$image_uri = $node->field_waterfall_image['und'][0]['uri'];
+			//$image_uri = image_style_path('waterfall_img',$image_uri);
+			$image_uri = file_create_url($image_uri);
+			$image_title = $node->title;
+			$author_name = $node->name;
+			$create_time = format_date($node->created,'custom', 'Y-m-d H:i');
+			$author_img = get_author_image($node->uid);//从yoxo_custom中调用
+			$html_str .= "<li><img class='content-image-uri' src=$image_uri>".$html_top."
+							<div class='content-image-title'>$image_title</div>
+							<div class='content-create-time'>$create_time</div>
+							<img class='content-author-img' src=$author_img>
+							<div class='content-author-name'>$author_name</div>
+							<a class='content-attention-button' href='#'>关注</a>
+							<div class='author-message'>
+							<span class='content-article-favorite'>33</span>
+							<span class='content-article-comment'>2333</span>
+							<span class='content-article-browse'>2333</span>
+							</div>
+							</li>";
+		}
+	}
+	return $html_str;
+}
+
+
+
+/**
+ * 获取头顶标签
+ * @return 标签的html输出语句
+ **/
+function get_tag_taxonomy(){
+	$terms = taxonomy_get_tree(2);
+	$count = 0;
+
+	$html_str = '<ul class="tag-cloud">';//用于存储输出的html语句
+	foreach ($terms as $tid => $term) {
+		$count++;
+		$name = $term->name;
+		$uri = "/taxonomy/term/" . $term->tid;
+		$html_str .= "<li><a href=$uri>$name</a></li>";
+		if($count >= 12){
+			break;
+		}
+	}
+	$html_str .= '<li><a href="/tagadelic_taxonomy" class="more">More tags</a></li></ul>';
+
+	return $html_str;
+}
+
+
+
+/**
+ * article页面
+ * 判断文章是否置顶以及文章节点
+ * @return string 置顶标识,节点
+ **/
+function is_sticky(){
+	$node = menu_get_object();
+	$node_str = 'node-' . $node->nid;
+	$sticky_str = $node->sticky ? ' node-sticky' : '';
+	return $node_str . ' ' . $sticky_str;
+}
+
+
+
+/**
+ * article页面
+ * 文章信息的html内容
+ * @return string content
+ **/
+function get_article_page_html(){
+	$node = menu_get_object();
+	// var_dump($node);
+	$sticky = $node->sticky;
+	if($sticky=='1'){$html_top_css ='sticky-node-top';}
+	else{$html_top_css='';}
+	$article_title = $node->title;
+	$article_create_time = format_date($node->created,'custom', 'Y-m-d H:i');
+	$article_img_url = file_create_url($node->field_image['und'][0]['uri']);
+	$article_body = $node->body['und'][0]['value'];
+	$article_source = $node->field_source['und'][0]['value'];
+	$article_source_url = $node->field_source_url['und'][0]['value'];
+	if($article_source){
+	$article_source = '<span>来源</span>：'.$article_source ;}
+	if($article_source_url){
+	$article_source_url = '<span>网址</span>：'.$article_source_url;}
+	$tag_tid = $node->field_tag['und'][0]['taxonomy_term']->tid;
+	$article_tag = "<a href='/taxonomy/term/$tag_tid'>" . $node->field_tag['und'][0]['taxonomy_term']->name . "</a>";
+	//TODO 这里还要进行内容类型的判定
+	$pre_article_nid = $node->nid - 1;
+	$next_article_nid = $node->nid + 1;
+	$article_page_html = '';
+	$article_page_html .= "<div class='article-content-box'>
+							<div class='field field-name-field-title $html_top_css'><div class='field-items'>$article_title</div></div>
+							<div class='field field-name-field-time'><div class='field-items'>$article_create_time</div></div>
+							<div class='field field-name-field-image'><div class='field-items'><img src=$article_img_url></div></div>
+							<div class='field field-name-body field-type-text-with-summary'><div class='field-items'>$article_body</div></div>
+							
+							<div class='field field-name-source'><div class='field-items'>$article_source</div></div>
+							<div class='field field-name-source_url'><div class='field-items'>$article_source_url</div></div>
+							
+							<div class='field field-name-field-tag field-type-taxonomy-term-reference'><div class='field-items'>$article_tag</div></div>
+							<div class='control-node-page'><ul><li class='previous-node-page'><a href='/node/$pre_article_nid'>上一条</a></li>
+							<li class='next-node-page'><a href='/node/$next_article_nid'>下一条</a></li></ul></div></div>";
+	
+	return $article_page_html;
+}
+
+
+
+/**
+ * article页面
+ * 文章作者的html内容
+ * @return string message
+ **/
+function get_article_author_mes_html(){
+	$node = menu_get_object();
+	$author_name = $node->name;
+	$author_img = get_author_image($node->uid);
+	$article_author_html = "<div class='author-message-box'>
+						<img class='content-author-img' src=$author_img>
+						<div class='content-author-name'>$author_name</div>
+						<span class='content-article-favorite'>33</span>
+						<span class='content-article-comment'>2333</span>
+						<span class='content-article-browse'>2333</span>
+						</div>";
+
+	return $article_author_html;
+}
+
+
+
+/**
+ * article页面
+ * 相关文章的html内容
+ * @return string related article
+ **/
+function get_article_related_html(){
+	$res = get_nodes_by_type('article');
+	shuffle($res);
+	$article_array = array_slice($res, 1, 4); 
+	$article_related_html = "<div class='article-related-box'><div class='article-related-summary'>相关文章</div><ul>";
+	foreach ($article_array as $key => $value) {
+		$article_related_img_url = file_create_url($value->field_image['und'][0]['uri']);
+		$article_related_title = $value->title;
+		$article_related_html .= "<li class='article-related-list'>
+						<div class='article-related-content'><img class='article-related-img' src=$article_related_img_url>
+						<span class='article-related-title'>$article_related_title</span>
+						</li>";
+	}
+	$article_related_html .= "</ul></div>";
+	return $article_related_html;
+}
+
+
+
+/**
+ * article页面
+ * 相关文章的html评论
+ * @return string user html
+ **/
+function get_user_html(){
+	global $user;
+	$node = menu_get_object();
+	$node_nid = $node->nid;
+	$user_img_url = get_author_image($user->uid);
+	$user_html = "<div class='add-comment-box'><img class='user-img-portrait' src=$user_img_url>
+					<form class='comment-form' action='/comment/reply/$node_nid' method='post' id='comment-form' accept-charset='UTF-8'><textarea></textarea>
+					<div class='field-type-text-long field-name-comment-body field-widget-text-textarea form-wrapper' id='edit-comment-body'>
+					<div id='comment-body-add-more-wrapper'><div class='text-format-wrapper'><div class='form-item form-type-textarea form-item-comment-body-und-0-value'><input type='submit' id='edit-submit' name='op' value='发表评论' class='form-submit'></div></div></div></form></div>";
+
+	return $user_html;
+}
+
+
+
+/**
+ * 测试函数，可以删除
+ **/
+function test(){
+	$res = db_select('node', 'n')
+		->fields('n', array('nid'))
+		->condition('type', 'article')
+		->orderBy('created', 'DESC')
+		->extend('PagerDefault')
+      	->limit(7)
+		->execute()
+		->fetchAll();
+	var_dump($res);
+}
+
+
+/**
+ * 根据uid获取用户头像
+ * @return 用户头像的url地址
+ **/
+function get_author_image($uid){
+	$user = user_load($uid);
+	return file_create_url($user->picture->uri);
+}
+
+/**
+ * 获取评论个数
+ **/
+
+function comment_count_published() {
+	$node = menu_get_object();
+	$node_nid = $node->nid;
+  $count = db_query('SELECT COUNT(cid) FROM {comment} WHERE status = :status and  nid = :nid', array(
+    ':status' => 1,
+    ':nid' => $node_nid,
+  ))->fetchField();
+  return t(' @count 条评论 ', array('@count' => $count));
+}
+
+/**
+ * 获取登录弹窗页
+ **/
+
+?>
